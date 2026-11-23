@@ -13,13 +13,23 @@
 const API = {
   // TODO: replace with `await fetch('/api/upload', { method: 'POST', body: formData })`
   async uploadDocument(file) {
-    await delay(600 + Math.random() * 500);
-    return {
-      id: crypto.randomUUID(),
-      name: file.name,
-      pages: Math.floor(Math.random() * 40) + 3,
-      status: "indexed",
-    };
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(
+    "https://pdf-analyzer-hbpv.onrender.com/upload",
+    {
+      method: "POST",
+      body: formData
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("PDF upload failed");
+  }
+
+  return await response.json();
+},
   },
 
   // TODO: replace with `await fetch('/api/query', { method: 'POST', body: JSON.stringify({ question, doc_ids }) })`
