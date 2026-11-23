@@ -9,15 +9,11 @@ from app.config import UPLOAD_FOLDER
 from app.database import get_db
 from app.models.models import UploadedDocument
 from app.services.file_service import extract_text
-
-<<<<<<< HEAD
-=======
 from document_processor.clean_text import clean_text
 from document_processor.chunk_text import chunk_text
 from document_processor.embeddings import create_embeddings
 from document_processor.vector_store import store_embeddings
 
->>>>>>> 66459fd (Integrate backend, frontend and RAG pipeline)
 router = APIRouter(
     prefix="/upload",
     tags=["Upload"]
