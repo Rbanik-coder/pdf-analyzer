@@ -30,7 +30,7 @@ const API = {
 
   return await response.json();
 },
-  },
+
 
   // TODO: replace with `await fetch('/api/query', { method: 'POST', body: JSON.stringify({ question, doc_ids }) })`
   async askQuestion(question, docs) {
