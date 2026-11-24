@@ -1,46 +1,113 @@
-//API Functions
-console.log("NEW APP.JS LOADED")
+// ---------------------------------------------------------------
+// Safety net: show errors instead of dying silently
+// ---------------------------------------------------------------
 window.onerror = function (msg, src, line, col, err) {
   console.error("GLOBAL ERROR:", msg, "at line", line, err);
 };
-console.log("Page loaded at", new Date().toLocaleTimeString());
+
+// Fallback so the script never crashes on browsers / http pages
+// where crypto.randomUUID is missing (this used to kill the login button)
+function uuid() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
+// Set window.API_BASE in config.js (your Render URL). Falls back to local dev.
+const API_BASE =
+  (window.API_BASE || "").replace(/\/$/, "") || "http://127.0.0.1:8000";
+
+// ---------------------------------------------------------------
+// Session handling
+// ---------------------------------------------------------------
+function safeGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+function safeSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (_) {}
+}
+function safeRemove(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch (_) {}
+}
+
+let SESSION_ID = safeGet("session_id");
+if (!SESSION_ID) {
+  SESSION_ID = uuid();
+  safeSet("session_id", SESSION_ID);
+}
+const authHeaders = (extra = {}) => ({ "X-Session-ID": SESSION_ID, ...extra });
+
+async function errorMessage(response, fallback) {
+  try {
+    const body = await response.json();
+    if (body && body.detail) return String(body.detail);
+  } catch (_) {}
+  return fallback;
+}
+
+// ---------------------------------------------------------------
+// API
+// ---------------------------------------------------------------
 const API = {
   async uploadDocument(file) {
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch("http://127.0.0.1:8000/upload", {
+    const response = await fetch(`${API_BASE}/upload`, {
       method: "POST",
+      headers: authHeaders(),
       body: formData,
     });
 
     if (!response.ok) {
-      throw new Error("Upload failed");
+      throw new Error(await errorMessage(response, "Upload failed"));
     }
 
     const data = await response.json();
 
     return {
-      id: crypto.randomUUID(),
+      id: uuid(),
       name: data.filename,
-      pages: "-",
+      pages: data.pages ?? "-",
       status: "indexed",
     };
   },
 
+  async listDocuments() {
+    const response = await fetch(`${API_BASE}/documents`, {
+      headers: authHeaders(),
+    });
+    if (!response.ok) throw new Error("Could not load documents");
+    const data = await response.json();
+    return data.documents.map((d) => ({
+      id: uuid(),
+      name: d.name,
+      pages: d.pages ?? "-",
+      status: "indexed",
+    }));
+  },
+
   async askQuestion(question) {
-    const response = await fetch("http://127.0.0.1:8000/ask", {
+    const response = await fetch(`${API_BASE}/ask`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        question: question,
-      }),
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ question }),
     });
 
     if (!response.ok) {
-      throw new Error("Failed to get answer");
+      throw new Error(await errorMessage(response, "Failed to get answer"));
     }
 
     const data = await response.json();
@@ -52,10 +119,9 @@ const API = {
   },
 };
 
-function delay(ms) {
-  return new Promise((res) => setTimeout(res, ms));
-}
-
+// ---------------------------------------------------------------
+// State + element references
+// ---------------------------------------------------------------
 const state = {
   user: null,
   documents: [],
@@ -68,20 +134,30 @@ const guestBtn = document.getElementById("guest-btn");
 const appEl = document.getElementById("app");
 const userChip = document.getElementById("user-chip");
 const signoutBtn = document.getElementById("signout-btn");
-const savedUser = localStorage.getItem("user");
-if (savedUser) {
-  enterApp(savedUser);
-}
 
+const fileInput = document.getElementById("file-input");
+const dropzone = document.getElementById("dropzone");
+const catalogDrawer = document.getElementById("catalog-drawer");
+const catalogEmpty = document.getElementById("catalog-empty");
+const docCount = document.getElementById("doc-count");
+
+const chatForm = document.getElementById("chat-form");
+const chatInput = document.getElementById("chat-input");
+const chatThread = document.getElementById("chat-thread");
+const sendBtn = document.getElementById("send-btn");
+
+// ---------------------------------------------------------------
+// Sign-in
+// ---------------------------------------------------------------
 function enterApp(name) {
   state.user = name || "Guest";
-  localStorage.setItem("user", state.user);
+  safeSet("user", state.user);
 
   userChip.textContent = state.user;
   signinOverlay.hidden = true;
   appEl.hidden = false;
 
-  document.getElementById("chat-input").focus();
+  chatInput.focus();
 }
 
 signinForm.addEventListener("submit", (e) => {
@@ -92,33 +168,28 @@ signinForm.addEventListener("submit", (e) => {
 guestBtn.addEventListener("click", () => enterApp("Guest"));
 
 signoutBtn.addEventListener("click", () => {
-  localStorage.removeItem("user");
+  safeRemove("user");
   appEl.hidden = true;
   signinOverlay.hidden = false;
   signinNameInput.value = "";
 });
 
-const fileInput = document.getElementById("file-input");
-const dropzone = document.getElementById("dropzone");
-const catalogDrawer = document.getElementById("catalog-drawer");
-const catalogEmpty = document.getElementById("catalog-empty");
-const docCount = document.getElementById("doc-count");
+// Auto sign-in if the user was already signed in
+const savedUser = safeGet("user");
+if (savedUser) {
+  enterApp(savedUser);
+}
 
-// fileInput.addEventListener("change", async (e) => {
-//   console.log("CHANGE EVENT");
-//   await handleFiles(e.target.files);
-//   console.log("HANDLEFILES FINISHED");
-// });
-
+// ---------------------------------------------------------------
+// Uploads
+// ---------------------------------------------------------------
 fileInput.addEventListener("change", async (e) => {
-  console.log("CHANGE EVENT");
-
   try {
     await handleFiles(e.target.files);
-    console.log("HANDLEFILES FINISHED");
   } catch (err) {
-    console.error("OUTER ERROR:", err);
+    console.error("Upload error:", err);
   }
+  fileInput.value = ""; // allow re-uploading the same file
 });
 
 ["dragover", "dragenter"].forEach((evt) =>
@@ -141,7 +212,7 @@ dropzone.addEventListener("drop", (e) => {
 async function handleFiles(fileList) {
   const files = Array.from(fileList || []);
   for (const file of files) {
-    const placeholderId = `pending-${crypto.randomUUID()}`;
+    const placeholderId = `pending-${uuid()}`;
     renderPendingCard(placeholderId, file.name);
     try {
       const doc = await API.uploadDocument(file);
@@ -150,6 +221,7 @@ async function handleFiles(fileList) {
     } catch (err) {
       removeCard(placeholderId);
       console.error("Upload failed:", err);
+      alert(`Couldn't upload ${file.name}: ${err.message}`);
     }
     updateDocCount();
   }
@@ -179,14 +251,14 @@ function replacePendingCard(id, doc) {
     <div class="doc-header">
       <p class="doc-name">${escapeHtml(doc.name)}</p>
 
-      <button class="delete-btn" data-file="${doc.name}">
+      <button class="delete-btn" type="button">
         🗑️
       </button>
     </div>
 
     <p class="doc-meta">
       <span class="doc-status">
-        indexed · ${doc.pages}p
+        indexed · ${escapeHtml(String(doc.pages))}p
       </span>
 
       <span>✓</span>
@@ -196,15 +268,8 @@ function replacePendingCard(id, doc) {
   const deleteBtn = card.querySelector(".delete-btn");
 
   deleteBtn.addEventListener("click", async () => {
-    await deleteDocument(doc.name);
-
-    card.remove();
-
-    state.documents = state.documents.filter(
-      d => d.name !== doc.name
-    );
-
-    updateDocCount();
+    const ok = await deleteDocument(doc.name);
+    if (ok) card.remove();
   });
 }
 
@@ -216,13 +281,12 @@ function removeCard(id) {
 function updateDocCount() {
   const n = state.documents.length;
   docCount.textContent = `${n} document${n === 1 ? "" : "s"}`;
+  catalogEmpty.style.display = n ? "none" : "";
 }
 
-const chatForm = document.getElementById("chat-form");
-const chatInput = document.getElementById("chat-input");
-const chatThread = document.getElementById("chat-thread");
-const sendBtn = document.getElementById("send-btn");
-
+// ---------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const question = chatInput.value.trim();
@@ -242,7 +306,7 @@ chatForm.addEventListener("submit", async (e) => {
   } catch (err) {
     typingEl.remove();
     addAssistantMessage(
-      "Something went wrong reaching the assistant. Please try again.",
+      "Something went wrong reaching the assistant. If the server was idle, it may be waking up — please try again in a few seconds.",
       []
     );
     console.error(err);
@@ -277,12 +341,12 @@ function addTypingIndicator() {
 function addAssistantMessage(text, citations) {
   const el = document.createElement("div");
   el.className = "msg assistant";
-  const msgId = crypto.randomUUID().slice(0, 8);
+  const msgId = uuid().slice(0, 8);
 
   const tabsHtml = citations
     .map(
       (c, i) => `
-      <button class="citation-tab" data-target="cite-${msgId}-${i}">
+      <button class="citation-tab" type="button" data-target="cite-${msgId}-${i}">
         Source ${i + 1} · ${escapeHtml(c.doc)}
       </button>`
     )
@@ -323,16 +387,20 @@ function scrollToBottom() {
 
 function escapeHtml(str) {
   const div = document.createElement("div");
-  div.textContent = str;
+  div.textContent = str == null ? "" : String(str);
   return div.innerHTML;
 }
 
+// ---------------------------------------------------------------
+// Delete + restore
+// ---------------------------------------------------------------
 async function deleteDocument(filename) {
   try {
     const response = await fetch(
-      `http://127.0.0.1:8000/delete/${encodeURIComponent(filename)}`,
+      `${API_BASE}/delete/${encodeURIComponent(filename)}`,
       {
         method: "DELETE",
+        headers: authHeaders(),
       }
     );
 
@@ -340,12 +408,28 @@ async function deleteDocument(filename) {
       throw new Error("Delete failed");
     }
 
-    state.documents = state.documents.filter(doc => doc.name !== filename);
-
-    renderCatalog();
-
+    state.documents = state.documents.filter((doc) => doc.name !== filename);
+    updateDocCount();
+    return true;
   } catch (err) {
     console.error(err);
     alert("Couldn't delete the document.");
+    return false;
   }
 }
+
+async function restoreDocuments() {
+  try {
+    const docs = await API.listDocuments();
+    for (const doc of docs) {
+      const id = `pending-${uuid()}`;
+      renderPendingCard(id, doc.name);
+      state.documents.push(doc);
+      replacePendingCard(id, doc);
+    }
+    updateDocCount();
+  } catch (err) {
+    console.warn("Could not restore documents:", err);
+  }
+}
+restoreDocuments();

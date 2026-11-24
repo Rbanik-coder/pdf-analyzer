@@ -9,6 +9,7 @@ from app.config import UPLOAD_FOLDER
 from app.database import get_db
 from app.models.models import UploadedDocument
 from app.services.file_service import extract_text
+
 from document_processor.clean_text import clean_text
 from document_processor.chunk_text import chunk_text
 from document_processor.embeddings import create_embeddings
@@ -60,7 +61,7 @@ async def upload_document(
     db.commit()
     db.refresh(document)
 
-       # Extract text
+    # Extract text
     text = extract_text(filepath)
 
     # Clean text
@@ -69,13 +70,14 @@ async def upload_document(
     # Split into chunks
     chunks = chunk_text(cleaned_text)
 
-    # Prepare chunk data
+    # Prepare uniquely identified chunk data
     chunk_data = []
 
     for i, chunk in enumerate(chunks):
         chunk_data.append(
             {
-                "id": i,
+                "id": f"{document_id}_{i}",
+                "document_id": document_id,
                 "text": chunk,
                 "source": file.filename
             }
